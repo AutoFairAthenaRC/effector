@@ -106,12 +106,15 @@ class Regions:
                     "foc": self.foc,
                 }
             ]
+
             for lev in range(self.max_split_levels):
                 # if any subregion has less than min_points, stop
                 if any([len(x) < self.min_points for x in x_list]):
+                    print("less than min_points, breaking")
                     break
 
                 # find optimal split
+
                 split = self.single_level_splits(
                     x_list, x_jac_list, splits[-1]["heterogeneity"]
                 )
@@ -121,16 +124,31 @@ class Regions:
                 feat, pos, typ = split["feature"], split["position"], split["type"]
 
                 if x_jac_list is not None:
-                    x_jac_list = self.flatten_list(
+                    if typ == "cat":
+                        x_jac_list = self.flatten_list(
+                            [
+                                self.split_dataset(x, x_jac, feat, pos, typ)
+                                for x, x_jac in zip(x_list, x_jac_list)
+                            ]
+                        )
+                    else:
+                        x_jac_list = self.flatten_list(
+                            [
+                                self.split_dataset_2(x, x_jac, feat, pos[0], pos[1])
+                                for x, x_jac in zip(x_list, x_jac_list)
+                            ]
+                        )
+                if typ == "cat":
+                    x_list = self.flatten_list(
+                        [self.split_dataset(x, None, feat, pos, typ) for x in x_list]
+                    )
+                else:
+                    x_list = self.flatten_list(
                         [
-                            self.split_dataset(x, x_jac, feat, pos, typ)
-                            for x, x_jac in zip(x_list, x_jac_list)
+                            self.split_dataset_2(x, None, feat, pos[0], pos[1])
+                            for x in x_list
                         ]
                     )
-
-                x_list = self.flatten_list(
-                    [self.split_dataset(x, None, feat, pos, typ) for x in x_list]
-                )
 
                 self.splits = splits
 
@@ -155,115 +173,227 @@ class Regions:
 
         big_M = -BIG_M
 
-        # weighted_heter_drop[i,j] (i index of foc and j index of split position) is
-        # the accumulated heterogeneity drop if I split foc[i] at index j
-        weighted_heter_drop = np.ones([len(foc), max(nof_splits, cat_limit)]) * big_M
+        # weighted_heter_drop[i,j,k] (i index of foc, j index of 1st split position, k index of 2nd split position). it is
+        # the accumulated heterogeneity drop if I split foc[i] at index j and at index k (j < k)
 
-        # weighted_heter[i,j] (i index of foc and j index of split position) is
-        # the accumulated heterogeneity if I split foc[i] at index j
-        weighted_heter = np.ones([len(foc), max(nof_splits, cat_limit)]) * big_M
+        weighted_heter_drop = (
+            np.ones([len(foc), max(nof_splits, cat_limit), max(nof_splits, cat_limit)])
+            * big_M
+        )
+
+        # weighted_heter[i,j] (i index of foc, j index of first split position, k index of second split position) is
+        # the accumulated heterogeneity if I split foc[i] at index j and k
+        weighted_heter = (
+            np.ones([len(foc), max(nof_splits, cat_limit), max(nof_splits, cat_limit)])
+            * big_M
+        )
 
         # list with len(foc) elements
         # each element is a list with the split positions for the corresponding feature of conditioning
         candidate_split_positions = [
-            self.find_positions_cat(data, foc_i)
-            if foc_types[i] == "cat"
-            else self.find_positions_cont(data, foc_i, nof_splits)
+            (
+                self.find_positions_cat(data, foc_i)
+                if foc_types[i] == "cat"
+                else self.find_positions_cont(data, foc_i, nof_splits)
+            )
             for i, foc_i in enumerate(foc)
         ]
 
         # exhaustive search on all split positions
         for i, foc_i in enumerate(foc):
-            for j, position in enumerate(candidate_split_positions[i]):
-                # split datasets
-                x_list_2 = self.flatten_list(
-                    [
-                        self.split_dataset(x, None, foc_i, position, foc_types[i])
-                        for x in x_list
-                    ]
-                )
-                if x_jac_list is not None:
-                    x_jac_list_2 = self.flatten_list(
+            if foc_types[i] == "cat":
+                for j, position in enumerate(candidate_split_positions[i]):
+                    x_list_2 = self.flatten_list(
                         [
-                            self.split_dataset(x, x_jac, foc_i, position, foc_types[i])
-                            for x, x_jac in zip(x_list, x_jac_list)
+                            self.split_dataset(x, None, foc_i, position, foc_types[i])
+                            for x in x_list
                         ]
                     )
-
-                # sub_heter: list with the heterogeneity after split of foc_i at position j
-                if x_jac_list is None:
-                    sub_heter = [heter_func(x) for x in x_list_2]
-                else:
-                    sub_heter = [
-                        heter_func(x, x_jac) for x, x_jac in zip(x_list_2, x_jac_list_2)
-                    ]
-
-                # heter_drop: list with the heterogeneity drop after split of foc_i at position j
-                heter_drop = np.array(
-                    self.flatten_list(
-                        [
+                    if x_jac_list is not None:
+                        x_jac_list_2 = self.flatten_list(
                             [
-                                heter_bef - sub_heter[int(2 * i)],
-                                heter_bef - sub_heter[int(2 * i + 1)],
+                                self.split_dataset(
+                                    x, x_jac, foc_i, position, foc_types[i]
+                                )
+                                for x, x_jac in zip(x_list, x_jac_list)
                             ]
-                            for i, heter_bef in enumerate(heter_before)
+                        )
+
+                    # sub_heter: list with the heterogeneity after split of foc_i at position j
+                    if x_jac_list is None:
+                        sub_heter = [heter_func(x) for x in x_list_2]
+                    else:
+                        sub_heter = [
+                            heter_func(x, x_jac)
+                            for x, x_jac in zip(x_list_2, x_jac_list_2)
                         ]
+
+                    # heter_drop: list with the heterogeneity drop after split of foc_i at position j
+
+                    heter_drop = np.array(
+                        self.flatten_list(
+                            [
+                                [
+                                    heter_bef - sub_heter[int(2 * i)],
+                                    heter_bef - sub_heter[int(2 * i + 1)],
+                                ]
+                                for i, heter_bef in enumerate(heter_before)
+                            ]
+                        )
                     )
-                )
-                # populations: list with the number of instances in each dataset after split of foc_i at position j
-                populations = np.array([len(xx) for xx in x_list_2])
-                # weights analogous to the populations in each split
-                weights = (populations + 1) / (np.sum(populations + 1))
-                # weighted_heter_drop[i,j] is the weighted accumulated heterogeneity drop if I split foc[i] at index j
-                weighted_heter_drop[i, j] = np.sum(heter_drop * weights)
-                # weighted_heter[i,j] is the weighted accumulated heterogeneity if I split foc[i] at index j
-                weighted_heter[i, j] = np.sum(weights * np.array(sub_heter))
+                    # populations: list with the number of instances in each dataset after split of foc_i at position j
+                    populations = np.array([len(xx) for xx in x_list_2])
+                    # weights analogous to the populations in each split
+                    weights = (populations + 1) / (np.sum(populations + 1))
+
+                    weighted_heter_drop[i, j, 0] = np.sum(heter_drop * weights)
+                    weighted_heter[i, j, 0] = np.sum(weights * np.array(sub_heter))
+            else:
+                print("Checking 3 regions")
+                for j, position1 in enumerate(candidate_split_positions[i]):
+                    for k, position2 in enumerate(candidate_split_positions[i]):
+                        if position1 > position2:
+                            continue
+                        # split datasets
+                        x_list_2 = self.flatten_list(
+                            [
+                                self.split_dataset_2(
+                                    x, None, foc_i, position1, position2
+                                )
+                                for x in x_list
+                            ]
+                        )
+                        if x_jac_list is not None:
+                            x_jac_list_2 = self.flatten_list(
+                                [
+                                    self.split_dataset_2(
+                                        x, x_jac, foc_i, position1, position2
+                                    )
+                                    for x, x_jac in zip(x_list, x_jac_list)
+                                ]
+                            )
+
+                        # sub_heter: list with the heterogeneity after split of foc_i at position j and k
+                        if x_jac_list is None:
+                            sub_heter = [heter_func(x) for x in x_list_2]
+                        else:
+                            sub_heter = [
+                                heter_func(x, x_jac)
+                                for x, x_jac in zip(x_list_2, x_jac_list_2)
+                            ]
+                        # heter_drop: list with the heterogeneity drop after split of foc_i at position j and k
+                        heter_drop = np.array(
+                            self.flatten_list(
+                                [
+                                    [
+                                        heter_bef - sub_heter[int(3 * i)],
+                                        heter_bef - sub_heter[int(3 * i + 1)],
+                                        heter_bef - sub_heter[int(3 * i + 2)],
+                                    ]
+                                    for i, heter_bef in enumerate(heter_before)
+                                ]
+                            )
+                        )
+                        # populations: list with the number of instances in each dataset after split of foc_i at position j
+                        populations = np.array([len(xx) for xx in x_list_2])
+                        # weights analogous to the populations in each split
+                        weights = (populations + 1) / (np.sum(populations + 1))
+                        weighted_heter_drop[i, j, k] = np.sum(heter_drop * weights)
+                        weighted_heter[i, j, k] = np.sum(weights * np.array(sub_heter))
 
         # find the split with the largest weighted heterogeneity drop
-        i, j = np.unravel_index(
-            np.argmax(weighted_heter_drop, axis=None), weighted_heter_drop.shape
-        )
-        feature = foc[i]
-        position = candidate_split_positions[i][j]
-        split_positions = candidate_split_positions[i]
 
-        # how many instances in each dataset after the min split
-        x_list_2 = self.flatten_list(
-            [
-                self.split_dataset(x, None, foc[i], position, foc_types[i])
-                for x in x_list
-            ]
+        i, j, k = np.unravel_index(
+            np.argmax(weighted_heter_drop),
+            weighted_heter_drop.shape,
         )
 
-        nof_instances = [len(x) for x in x_list_2]
-        if x_jac_list is None:
-            sub_heter = [heter_func(x) for x in x_list_2]
-        else:
-            x_jac_list_2 = self.flatten_list(
+        if foc_types[i] == "cat":
+            feature = foc[i]
+            position = candidate_split_positions[i][j]
+            split_positions = candidate_split_positions[i]
+
+            # how many instances in each dataset after the min split
+            x_list_2 = self.flatten_list(
                 [
-                    self.split_dataset(x, x_jac, foc[i], position, foc_types[i])
-                    for x, x_jac in zip(x_list, x_jac_list)
+                    self.split_dataset(x, None, foc[i], position, foc_types[i])
+                    for x in x_list
                 ]
             )
 
-            sub_heter = [
-                heter_func(x, x_jac) for x, x_jac in zip(x_list_2, x_jac_list_2)
-            ]
+            nof_instances = [len(x) for x in x_list_2]
+            if x_jac_list is None:
+                sub_heter = [heter_func(x) for x in x_list_2]
+            else:
+                x_jac_list_2 = self.flatten_list(
+                    [
+                        self.split_dataset(x, x_jac, foc[i], position, foc_types[i])
+                        for x, x_jac in zip(x_list, x_jac_list)
+                    ]
+                )
 
-        split = {
-            "feature": feature,
-            "position": position,
-            "range": [np.min(data[:, feature]), np.max(data[:, feature])],
-            "candidate_split_positions": split_positions,
-            "nof_instances": nof_instances,
-            "type": foc_types[i],
-            "heterogeneity": sub_heter,
-            "split_i": i,
-            "split_j": j,
-            "foc": foc,
-            "weighted_heter_drop": weighted_heter_drop[i, j],
-            "weighted_heter": weighted_heter[i, j],
-        }
+                sub_heter = [
+                    heter_func(x, x_jac) for x, x_jac in zip(x_list_2, x_jac_list_2)
+                ]
+
+            split = {
+                "feature": feature,
+                "position": position,
+                "range": [np.min(data[:, feature]), np.max(data[:, feature])],
+                "candidate_split_positions": split_positions,
+                "nof_instances": nof_instances,
+                "type": foc_types[i],
+                "heterogeneity": sub_heter,
+                "split_i": i,
+                "split_j": j,
+                "foc": foc,
+                "weighted_heter_drop": weighted_heter_drop[i, j, 0],
+                "weighted_heter": weighted_heter[i, j, 0],
+            }
+        else:
+            feature = foc[i]
+            position1 = candidate_split_positions[i][j]
+            position2 = candidate_split_positions[i][k]
+
+            split_positions = candidate_split_positions[i]
+
+            # how many instances in each dataset after the min split
+            x_list_2 = self.flatten_list(
+                [
+                    self.split_dataset_2(x, None, foc[i], position1, position2)
+                    for x in x_list
+                ]
+            )
+
+            nof_instances = [len(x) for x in x_list_2]
+            if x_jac_list is None:
+                sub_heter = [heter_func(x) for x in x_list_2]
+            else:
+                x_jac_list_2 = self.flatten_list(
+                    [
+                        self.split_dataset_2(x, x_jac, foc[i], position1, position2)
+                        for x, x_jac in zip(x_list, x_jac_list)
+                    ]
+                )
+
+                sub_heter = [
+                    heter_func(x, x_jac) for x, x_jac in zip(x_list_2, x_jac_list_2)
+                ]
+
+            split = {
+                "feature": feature,
+                "position": (position1, position2),
+                "range": [np.min(data[:, feature]), np.max(data[:, feature])],
+                "candidate_split_positions": split_positions,
+                "nof_instances": nof_instances,
+                "type": foc_types[i],
+                "heterogeneity": sub_heter,
+                "split_i": i,
+                "split_j": (j, k),
+                "foc": foc,
+                "weighted_heter_drop": weighted_heter_drop[i, j, k],
+                "weighted_heter": weighted_heter[i, j, k],
+            }
         return split
 
     def choose_important_splits(self):
@@ -324,6 +454,22 @@ class Regions:
 
         return X1, X2
 
+    def split_dataset_2(self, x, x_jac, feature, position1, position2):
+        ind_1 = x[:, feature] < position1
+        ind_2 = (x[:, feature] >= position1) & (x[:, feature] <= position2)
+        ind_3 = x[:, feature] > position2
+
+        if x_jac is None:
+            X1 = x[ind_1, :]
+            X2 = x[ind_2, :]
+            X3 = x[ind_3, :]
+        else:
+            X1 = x_jac[ind_1, :]
+            X2 = x_jac[ind_2, :]
+            X3 = x_jac[ind_3, :]
+
+        return X1, X2, X3
+
     def find_positions_cat(self, x, feature):
         return np.unique(x[:, feature])
 
@@ -347,7 +493,7 @@ class Regions:
             "nof_instances": self.splits[0]["nof_instances"][0],
             "data": self.data,
             "data_effect": self.data_effect,
-            "weight": 1.
+            "weight": 1.0,
         }
 
         feature_name = self.feature_names[self.feature]
@@ -368,9 +514,9 @@ class Regions:
 
             # find parent
             for j in range(nodes_to_add):
-                parent_name = parent_level_nodes[int(j/2)]
-                parent_data = parent_level_data[int(j/2)]
-                parent_data_effect = parent_level_data_effect[int(j/2)]
+                parent_name = parent_level_nodes[int(j / 2)]
+                parent_data = parent_level_data[int(j / 2)]
+                parent_data_effect = parent_level_data_effect[int(j / 2)]
 
                 # prepare data
 
@@ -386,9 +532,13 @@ class Regions:
 
                 pos_small = pos_scaled.round(2)
 
-                data_1, data_2 = self.split_dataset(parent_data, None, foc, pos, split["type"])
+                data_1, data_2 = self.split_dataset(
+                    parent_data, None, foc, pos, split["type"]
+                )
                 if self.data_effect is not None:
-                    data_effect_1, data_effect_2 = self.split_dataset(parent_data, parent_data_effect, foc, pos, split["type"])
+                    data_effect_1, data_effect_2 = self.split_dataset(
+                        parent_data, parent_data_effect, foc, pos, split["type"]
+                    )
                 else:
                     data_effect_1, data_effect_2 = None, None
 
@@ -409,23 +559,27 @@ class Regions:
                         name = foc_name + "  > {}".format(pos_small)
                         comparison = ">"
 
-                name = parent_name + " | " + name if nodes_to_add == 2 else parent_name + " and " + name
+                name = (
+                    parent_name + " | " + name
+                    if nodes_to_add == 2
+                    else parent_name + " and " + name
+                )
 
                 data = {
-                "heterogeneity": split["heterogeneity"][j],
-                "weight": float(data_new.shape[0]) / nof_instances,
-                "position": split["position"],
-                "feature": split["feature"],
-                "feature_type": split["type"],
-                "range": split["range"],
-                "candidate_split_positions": split["candidate_split_positions"],
-                "nof_instances": split["nof_instances"][j],
-                "data": data_new,
-                "data_effect": data_effect_new,
-                "comparison": comparison,
+                    "heterogeneity": split["heterogeneity"][j],
+                    "weight": float(data_new.shape[0]) / nof_instances,
+                    "position": split["position"],
+                    "feature": split["feature"],
+                    "feature_type": split["type"],
+                    "range": split["range"],
+                    "candidate_split_positions": split["candidate_split_positions"],
+                    "nof_instances": split["nof_instances"][j],
+                    "data": data_new,
+                    "data_effect": data_effect_new,
+                    "comparison": comparison,
                 }
 
-                tree.add_node(name, parent_name=parent_name, data=data, level=i+1)
+                tree.add_node(name, parent_name=parent_name, data=data, level=i + 1)
 
                 new_parent_level_nodes.append(name)
                 new_parent_level_data.append(data_new)
@@ -455,13 +609,20 @@ class Node:
         self.foc_type = data["feature_type"] if "feature_type" in data else None
         self.foc_position = data["position"] if "position" in data else None
         self.comparison = data["comparison"] if "comparison" in data else None
-        self.candidate_split_positions = data["candidate_split_positions"] if "candidate_split_positions" in data else None
+        self.candidate_split_positions = (
+            data["candidate_split_positions"]
+            if "candidate_split_positions" in data
+            else None
+        )
         self.range = data["range"] if "range" in data else None
 
     def show(self, show_data=False):
         print("Node id: ", self.idx)
         print("name: ", self.name)
-        print("parent name: ", self.parent_node.name if self.parent_node is not None else None)
+        print(
+            "parent name: ",
+            self.parent_node.name if self.parent_node is not None else None,
+        )
         print("level: ", self.level)
 
         print("heterogeneity: ", self.heterogeneity)
@@ -559,8 +720,18 @@ class Tree:
         if node is None:
             node = self.get_root()
 
-        indent = node.level*2
-        print("    " * indent + "Node id: %d, name: %s, heter: %.2f || nof_instances: %5d || weight: %.2f" % (node.idx, node.name, node.data['heterogeneity'], node.data['nof_instances'], node.data['weight']))
+        indent = node.level * 2
+        print(
+            "    " * indent
+            + "Node id: %d, name: %s, heter: %.2f || nof_instances: %5d || weight: %.2f"
+            % (
+                node.idx,
+                node.name,
+                node.data["heterogeneity"],
+                node.data["nof_instances"],
+                node.data["weight"],
+            )
+        )
         children = self.get_children(node.name)
         for child in children:
             self.show_full_tree(child)
@@ -568,13 +739,25 @@ class Tree:
     def show_level_stats(self, node=None):
         max_level = max([node.level for node in self.nodes])
         prev_heter = 0
-        for lev in range(max_level+1):
+        for lev in range(max_level + 1):
             level_stats = self.get_level_stats(lev)
             if lev == 0:
-                print("    " * lev*2 + "Level %.d, heter: %.2f" % (lev, level_stats['heterogeneity']))
+                print(
+                    "    " * lev * 2
+                    + "Level %.d, heter: %.2f" % (lev, level_stats["heterogeneity"])
+                )
             else:
-                print("    " * lev*2 + "Level %.d, heter: %.2f || heter drop: %.2f (%.2f%%)" % (lev, level_stats['heterogeneity'], prev_heter - level_stats['heterogeneity'], 100*(prev_heter - level_stats['heterogeneity'])/prev_heter))
-            prev_heter = level_stats['heterogeneity']
+                print(
+                    "    " * lev * 2
+                    + "Level %.d, heter: %.2f || heter drop: %.2f (%.2f%%)"
+                    % (
+                        lev,
+                        level_stats["heterogeneity"],
+                        prev_heter - level_stats["heterogeneity"],
+                        100 * (prev_heter - level_stats["heterogeneity"]) / prev_heter,
+                    )
+                )
+            prev_heter = level_stats["heterogeneity"]
 
 
 class DataTransformer:
