@@ -98,6 +98,7 @@ class RegionalEffectBase:
         min_points_per_subregion: int = 10,
         candidate_foc: Union[str, List] = "all",
         split_categorical_features: bool = False,
+        regions_check: int = -1,
     ):
         """
         Find the subregions for a single feature.
@@ -119,6 +120,7 @@ class RegionalEffectBase:
             heter_pcg_drop_thres,
             heter_small_enough,
             split_categorical_features,
+            regions_check,
         )
 
         # apply partitioning

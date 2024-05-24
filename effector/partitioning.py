@@ -26,6 +26,7 @@ class Regions:
         heter_pcg_drop_thres=0.1,
         heter_small_enough=0.1,
         split_categorical_features=False,
+        regions_check: int = -1,
     ):
         # setters
         self.feature = feature
@@ -42,6 +43,7 @@ class Regions:
         self.heter_pcg_drop_thres = heter_pcg_drop_thres
         self.heter_small_enough = heter_small_enough
         self.split_categorical_features = split_categorical_features
+        self.regions_check = regions_check
 
         self.foi = self.feature
         self.foc = (
@@ -116,7 +118,10 @@ class Regions:
                 # find optimal split
 
                 split = self.single_level_splits(
-                    x_list, x_jac_list, splits[-1]["heterogeneity"]
+                    x_list,
+                    x_jac_list,
+                    splits[-1]["heterogeneity"],
+                    regions_check=self.regions_check,
                 )
                 splits.append(split)
 
@@ -124,7 +129,7 @@ class Regions:
                 feat, pos, typ = split["feature"], split["position"], split["type"]
 
                 if x_jac_list is not None:
-                    if typ == "cat":
+                    if typ == "cat" or type(pos) != tuple:
                         x_jac_list = self.flatten_list(
                             [
                                 self.split_dataset(x, x_jac, feat, pos, typ)
@@ -138,7 +143,7 @@ class Regions:
                                 for x, x_jac in zip(x_list, x_jac_list)
                             ]
                         )
-                if typ == "cat":
+                if typ == "cat" or type(pos) != tuple:
                     x_list = self.flatten_list(
                         [self.split_dataset(x, None, feat, pos, typ) for x in x_list]
                     )
@@ -161,8 +166,13 @@ class Regions:
         x_list: list,
         x_jac_list: typing.Union[list, None],
         heter_before: list,
+        regions_check: int = -1,
     ):
-        """Find all splits for a single level."""
+        """Find all splits for a single level.
+        regions_check = -1 -> checks 2 regions
+        regions_check = 0 -> checks 2 and 3 regions
+        regions_check = 1 -> checks 3 regions
+        """
         foc_types = self.foc_types
         foc = self.foc
         nof_splits = self.nof_candidate_splits_for_numerical
@@ -176,14 +186,18 @@ class Regions:
         # weighted_heter_drop[i,j,k] (i index of foc, j index of 1st split position, k index of 2nd split position). it is
         # the accumulated heterogeneity drop if I split foc[i] at index j and at index k (j < k)
 
-        weighted_heter_drop = (
+        weighted_heter_drop_2 = np.ones([len(foc), max(nof_splits, cat_limit)]) * big_M
+
+        weighted_heter_drop_3 = (
             np.ones([len(foc), max(nof_splits, cat_limit), max(nof_splits, cat_limit)])
             * big_M
         )
 
         # weighted_heter[i,j] (i index of foc, j index of first split position, k index of second split position) is
         # the accumulated heterogeneity if I split foc[i] at index j and k
-        weighted_heter = (
+        weighted_heter_2 = np.ones([len(foc), max(nof_splits, cat_limit)]) * big_M
+
+        weighted_heter_3 = (
             np.ones([len(foc), max(nof_splits, cat_limit), max(nof_splits, cat_limit)])
             * big_M
         )
@@ -201,7 +215,7 @@ class Regions:
 
         # exhaustive search on all split positions
         for i, foc_i in enumerate(foc):
-            if foc_types[i] == "cat":
+            if foc_types[i] == "cat" or regions_check <= 0:
                 for j, position in enumerate(candidate_split_positions[i]):
                     x_list_2 = self.flatten_list(
                         [
@@ -246,10 +260,9 @@ class Regions:
                     # weights analogous to the populations in each split
                     weights = (populations + 1) / (np.sum(populations + 1))
 
-                    weighted_heter_drop[i, j, 0] = np.sum(heter_drop * weights)
-                    weighted_heter[i, j, 0] = np.sum(weights * np.array(sub_heter))
-            else:
-                print("Checking 3 regions")
+                    weighted_heter_drop_2[i, j] = np.sum(heter_drop * weights)
+                    weighted_heter_2[i, j] = np.sum(weights * np.array(sub_heter))
+            if foc_types[i] != "cat" and regions_check >= 0:
                 for j, position1 in enumerate(candidate_split_positions[i]):
                     for k, position2 in enumerate(candidate_split_positions[i]):
                         if position1 > position2:
@@ -298,17 +311,21 @@ class Regions:
                         populations = np.array([len(xx) for xx in x_list_2])
                         # weights analogous to the populations in each split
                         weights = (populations + 1) / (np.sum(populations + 1))
-                        weighted_heter_drop[i, j, k] = np.sum(heter_drop * weights)
-                        weighted_heter[i, j, k] = np.sum(weights * np.array(sub_heter))
+                        weighted_heter_drop_3[i, j, k] = np.sum(heter_drop * weights)
+                        weighted_heter_3[i, j, k] = np.sum(
+                            weights * np.array(sub_heter)
+                        )
 
         # find the split with the largest weighted heterogeneity drop
 
-        i, j, k = np.unravel_index(
-            np.argmax(weighted_heter_drop),
-            weighted_heter_drop.shape,
-        )
+        typee = foc_types[i]
 
-        if foc_types[i] == "cat":
+        if typee == "cat" or regions_check <= 0:
+            i, j = np.unravel_index(
+                np.argmax(weighted_heter_drop_2),
+                weighted_heter_drop_2.shape,
+            )
+
             feature = foc[i]
             position = candidate_split_positions[i][j]
             split_positions = candidate_split_positions[i]
@@ -336,7 +353,7 @@ class Regions:
                     heter_func(x, x_jac) for x, x_jac in zip(x_list_2, x_jac_list_2)
                 ]
 
-            split = {
+            split_2 = {
                 "feature": feature,
                 "position": position,
                 "range": [np.min(data[:, feature]), np.max(data[:, feature])],
@@ -347,20 +364,26 @@ class Regions:
                 "split_i": i,
                 "split_j": j,
                 "foc": foc,
-                "weighted_heter_drop": weighted_heter_drop[i, j, 0],
-                "weighted_heter": weighted_heter[i, j, 0],
+                "weighted_heter_drop": weighted_heter_drop_2[i, j],
+                "weighted_heter": weighted_heter_2[i, j],
             }
-        else:
-            feature = foc[i]
-            position1 = candidate_split_positions[i][j]
-            position2 = candidate_split_positions[i][k]
+        if typee != "cat" and regions_check >= 0:
 
-            split_positions = candidate_split_positions[i]
+            ii, jj, kk = np.unravel_index(
+                np.argmax(weighted_heter_drop_3),
+                weighted_heter_drop_3.shape,
+            )
+
+            feature = foc[ii]
+            position1 = candidate_split_positions[ii][jj]
+            position2 = candidate_split_positions[ii][kk]
+
+            split_positions = candidate_split_positions[ii]
 
             # how many instances in each dataset after the min split
             x_list_2 = self.flatten_list(
                 [
-                    self.split_dataset_2(x, None, foc[i], position1, position2)
+                    self.split_dataset_2(x, None, foc[ii], position1, position2)
                     for x in x_list
                 ]
             )
@@ -371,7 +394,7 @@ class Regions:
             else:
                 x_jac_list_2 = self.flatten_list(
                     [
-                        self.split_dataset_2(x, x_jac, foc[i], position1, position2)
+                        self.split_dataset_2(x, x_jac, foc[ii], position1, position2)
                         for x, x_jac in zip(x_list, x_jac_list)
                     ]
                 )
@@ -380,21 +403,32 @@ class Regions:
                     heter_func(x, x_jac) for x, x_jac in zip(x_list_2, x_jac_list_2)
                 ]
 
-            split = {
+            split_3 = {
                 "feature": feature,
                 "position": (position1, position2),
                 "range": [np.min(data[:, feature]), np.max(data[:, feature])],
                 "candidate_split_positions": split_positions,
                 "nof_instances": nof_instances,
-                "type": foc_types[i],
+                "type": foc_types[ii],
                 "heterogeneity": sub_heter,
-                "split_i": i,
-                "split_j": (j, k),
+                "split_i": ii,
+                "split_j": (jj, kk),
                 "foc": foc,
-                "weighted_heter_drop": weighted_heter_drop[i, j, k],
-                "weighted_heter": weighted_heter[i, j, k],
+                "weighted_heter_drop": weighted_heter_drop_3[ii, jj, kk],
+                "weighted_heter": weighted_heter_3[ii, jj, kk],
             }
-        return split
+
+        if typee == "cat":
+            return split_2
+        elif regions_check < 0:
+            return split_2
+        elif regions_check > 0:
+            return split_3
+        else:
+            if split_2["weighted_heter_drop"] < split_3["weighted_heter_drop"]:
+                return split_3
+            else:
+                return split_2
 
     def choose_important_splits(self):
         assert self.split_found, "No splits found for feature {}".format(self.feature)
