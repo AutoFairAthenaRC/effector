@@ -126,8 +126,9 @@ class RegionalEffectBase:
         # apply partitioning
         regions.search_all_splits()
         regions.choose_important_splits()
-        # self.tree_full["feature_{}".format(feature)] = regions.splits_to_tree()
-        # self.tree_pruned["feature_{}".format(feature)] = regions.splits_to_tree(True)
+        if regions_check == -1:
+            self.tree_full["feature_{}".format(feature)] = regions.splits_to_tree()
+            self.tree_pruned["feature_{}".format(feature)] = regions.splits_to_tree(True)
 
         # store the partitioning object
         self.partitioners["feature_{}".format(feature)] = regions
