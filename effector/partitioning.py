@@ -1,4 +1,5 @@
 import typing
+from typing import Literal, Callable
 import numpy as np
 import itertools
 import re
@@ -12,14 +13,14 @@ class Regions:
     def __init__(
         self,
         feature: int,
-        heter_func: callable,
+        heter_func: Callable,
         data: np.ndarray,
         data_effect: typing.Union[None, np.ndarray],
         feature_types: typing.Union[list, None],
         feature_names: typing.List[str],
         target_name: str,
         categorical_limit: int = 10,
-        candidate_conditioning_features: typing.Union[None, list] = None,
+        candidate_conditioning_features: typing.Union[Literal["all"], list] = "all",
         min_points_per_subregion: int = 10,
         nof_candidate_splits_for_numerical=20,
         max_split_levels=2,
