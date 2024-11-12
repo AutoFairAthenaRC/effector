@@ -183,7 +183,6 @@ class Regions:
         data = self.data
 
         big_M = -BIG_M
-
         # weighted_heter_drop[i,j,k] (i index of foc, j index of 1st split position, k index of 2nd split position). it is
         # the accumulated heterogeneity drop if I split foc[i] at index j and at index k (j < k)
 
@@ -202,7 +201,6 @@ class Regions:
             np.ones([len(foc), max(nof_splits, cat_limit), max(nof_splits, cat_limit)])
             * big_M
         )
-
         # list with len(foc) elements
         # each element is a list with the split positions for the corresponding feature of conditioning
         candidate_split_positions = [
@@ -259,15 +257,16 @@ class Regions:
                     # populations: list with the number of instances in each dataset after split of foc_i at position j
                     populations = np.array([len(xx) for xx in x_list_2])
                     # weights analogous to the populations in each split
-                    weights = (populations + 1) / (np.sum(populations + 1))
+                    weights = populations / np.sum(populations)
 
                     weighted_heter_drop_2[i, j] = np.sum(heter_drop * weights)
                     weighted_heter_2[i, j] = np.sum(weights * np.array(sub_heter))
             if foc_types[i] != "cat" and regions_check >= 0:
                 for j, position1 in enumerate(candidate_split_positions[i]):
-                    for k, position2 in enumerate(candidate_split_positions[i]):
-                        if position1 > position2:
-                            continue
+                    for k, position2 in enumerate(
+                        candidate_split_positions[i][j + 1 :]
+                    ):
+
                         # split datasets
                         x_list_2 = self.flatten_list(
                             [
@@ -311,22 +310,37 @@ class Regions:
                         # populations: list with the number of instances in each dataset after split of foc_i at position j
                         populations = np.array([len(xx) for xx in x_list_2])
                         # weights analogous to the populations in each split
-                        weights = (populations + 1) / (np.sum(populations + 1))
-                        weighted_heter_drop_3[i, j, k] = np.sum(heter_drop * weights)
-                        weighted_heter_3[i, j, k] = np.sum(
+                        weights = populations / np.sum(populations)
+                        pos_2_idx = j + k + 1
+                        weighted_heter_drop_3[i, j, pos_2_idx] = np.sum(
+                            heter_drop * weights
+                        )
+                        weighted_heter_3[i, j, pos_2_idx] = np.sum(
                             weights * np.array(sub_heter)
                         )
 
         # find the split with the largest weighted heterogeneity drop
 
-        typee = foc_types[i]
-
-        if typee == "cat" or regions_check <= 0:
+        if regions_check <= 0 or "cat" in foc_types:
             i, j = np.unravel_index(
                 np.argmax(weighted_heter_drop_2),
                 weighted_heter_drop_2.shape,
             )
+            drop2 = weighted_heter_drop_2[i, j]
 
+        if regions_check >= 0:
+            ii, jj, kk = np.unravel_index(
+                np.argmax(weighted_heter_drop_3),
+                weighted_heter_drop_3.shape,
+            )
+            drop3 = weighted_heter_drop_3[ii, jj, kk]
+
+        # if drop3 == big_M -> all foc features are categorical
+        if (
+            regions_check == -1
+            or drop3 == big_M
+            or (regions_check == 0 and drop2 >= drop3)
+        ):
             feature = foc[i]
             position = candidate_split_positions[i][j]
             split_positions = candidate_split_positions[i]
@@ -354,11 +368,16 @@ class Regions:
                     heter_func(x, x_jac) for x, x_jac in zip(x_list_2, x_jac_list_2)
                 ]
 
+            init_weghted_heter_2 = weighted_heter_drop_2[i, j] + weighted_heter_2[i, j]
+            weighted_heter_drop_ratio_2 = (
+                weighted_heter_drop_2[i, j] / init_weghted_heter_2
+            )
+
             split_2 = {
                 "feature": feature,
                 "position": position,
                 "range": [np.min(data[:, feature]), np.max(data[:, feature])],
-                "candidate_split_positions": split_positions,
+                "candidate_split_positions": list(split_positions),
                 "nof_instances": nof_instances,
                 "type": foc_types[i],
                 "heterogeneity": sub_heter,
@@ -366,15 +385,11 @@ class Regions:
                 "split_j": j,
                 "foc": foc,
                 "weighted_heter_drop": weighted_heter_drop_2[i, j],
+                "weighted_heter_drop_ratio": weighted_heter_drop_ratio_2,
                 "weighted_heter": weighted_heter_2[i, j],
             }
-        if typee != "cat" and regions_check >= 0:
-
-            ii, jj, kk = np.unravel_index(
-                np.argmax(weighted_heter_drop_3),
-                weighted_heter_drop_3.shape,
-            )
-
+            return split_2
+        else:
             feature = foc[ii]
             position1 = candidate_split_positions[ii][jj]
             position2 = candidate_split_positions[ii][kk]
@@ -404,11 +419,18 @@ class Regions:
                     heter_func(x, x_jac) for x, x_jac in zip(x_list_2, x_jac_list_2)
                 ]
 
+            init_weghted_heter_3 = (
+                weighted_heter_drop_3[ii, jj, kk] + weighted_heter_3[ii, jj, kk]
+            )
+            weighted_heter_drop_ratio_3 = (
+                weighted_heter_drop_3[ii, jj, kk] / init_weghted_heter_3
+            )
+
             split_3 = {
                 "feature": feature,
                 "position": (position1, position2),
                 "range": [np.min(data[:, feature]), np.max(data[:, feature])],
-                "candidate_split_positions": split_positions,
+                "candidate_split_positions": list(split_positions),
                 "nof_instances": nof_instances,
                 "type": foc_types[ii],
                 "heterogeneity": sub_heter,
@@ -416,20 +438,10 @@ class Regions:
                 "split_j": (jj, kk),
                 "foc": foc,
                 "weighted_heter_drop": weighted_heter_drop_3[ii, jj, kk],
+                "weighted_heter_drop_ratio": weighted_heter_drop_ratio_3,
                 "weighted_heter": weighted_heter_3[ii, jj, kk],
             }
-
-        if typee == "cat":
-            return split_2
-        elif regions_check < 0:
-            return split_2
-        elif regions_check > 0:
             return split_3
-        else:
-            if split_2["weighted_heter_drop"] < split_3["weighted_heter_drop"]:
-                return split_3
-            else:
-                return split_2
 
     def choose_important_splits(self):
         assert self.split_found, "No splits found for feature {}".format(self.feature)
@@ -479,7 +491,6 @@ class Regions:
         else:
             ind_1 = x[:, feature] < position
             ind_2 = x[:, feature] >= position
-
         if x_jac is None:
             X1 = x[ind_1, :]
             X2 = x[ind_2, :]
