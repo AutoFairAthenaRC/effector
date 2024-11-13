@@ -106,10 +106,12 @@ class Regions:
                     "nof_instances": [len(self.data)],
                     "split_i": -1,
                     "split_j": -1,
-                    "foc": self.foc,
+                    "foc": self.foc.copy(),
                 }
             ]
 
+            level_foc = self.foc
+            level_foc_types = self.foc_types
             for lev in range(self.max_split_levels):
                 # if any subregion has less than min_points, stop
                 if any([len(x) < self.min_points for x in x_list]):
@@ -123,6 +125,8 @@ class Regions:
                     x_jac_list,
                     splits[-1]["heterogeneity"],
                     regions_check=self.regions_check,
+                    foc=level_foc.copy(),
+                    foc_types=level_foc_types.copy(),
                 )
                 splits.append(split)
 
@@ -168,14 +172,14 @@ class Regions:
         x_jac_list: typing.Union[list, None],
         heter_before: list,
         regions_check: int = -1,
+        foc: list = None,
+        foc_types: list = None,
     ):
         """Find all splits for a single level.
         regions_check = -1 -> checks 2 regions
         regions_check = 0 -> checks 2 and 3 regions
         regions_check = 1 -> checks 3 regions
         """
-        foc_types = self.foc_types
-        foc = self.foc
         nof_splits = self.nof_candidate_splits_for_numerical
         heter_func = self.heter_func
         cat_limit = self.cat_limit
@@ -320,7 +324,6 @@ class Regions:
                         )
 
         # find the split with the largest weighted heterogeneity drop
-
         if regions_check <= 0 or "cat" in foc_types:
             i, j = np.unravel_index(
                 np.argmax(weighted_heter_drop_2),
