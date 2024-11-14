@@ -556,66 +556,107 @@ class Regions:
         parent_level_data = [self.data]
         parent_level_data_effect = [self.data_effect]
         splits = self.important_splits if only_important else self.splits[1:]
+        prev_nodes_added = 1
+        prev_nodes_start_idx = 0
 
         for i, split in enumerate(splits):
 
             # nof nodes to add
             nodes_to_add = len(split["nof_instances"])
 
-            new_parent_level_nodes = []
-            new_parent_level_data = []
-            new_parent_level_data_effect = []
+            # how many regions are created by the split
+            cur_split_n_regions = nodes_to_add / prev_nodes_added
 
             # find parent
             for j in range(nodes_to_add):
-                parent_name = parent_level_nodes[int(j / 2)]
-                parent_data = parent_level_data[int(j / 2)]
-                parent_data_effect = parent_level_data_effect[int(j / 2)]
+                parent_idx = prev_nodes_start_idx + int(j / cur_split_n_regions)
+                parent_name = parent_level_nodes[parent_idx]
+                parent_data = parent_level_data[parent_idx]
+                parent_data_effect = parent_level_data_effect[parent_idx]
 
                 # prepare data
 
                 foc_name = self.feature_names[split["feature"]]
                 foc = split["feature"]
-                pos = split["position"]
-                if scale_x_list is not None:
-                    mean = scale_x_list[foc]["mean"]
-                    std = scale_x_list[foc]["std"]
-                    pos_scaled = std * split["position"] + mean
-                else:
-                    pos_scaled = pos
 
-                pos_small = pos_scaled.round(2)
-
-                data_1, data_2 = self.split_dataset(
-                    parent_data, None, foc, pos, split["type"]
-                )
-                if self.data_effect is not None:
-                    data_effect_1, data_effect_2 = self.split_dataset(
-                        parent_data, parent_data_effect, foc, pos, split["type"]
+                if cur_split_n_regions == 2:
+                    pos = split["position"]
+                    pos_text = (
+                        pos.round(2)
+                        if scale_x_list is None
+                        else (
+                            scale_x_list[foc]["std"] * pos + scale_x_list[foc]["mean"]
+                        ).round(2)
                     )
-                else:
-                    data_effect_1, data_effect_2 = None, None
+                    data_1, data_2 = self.split_dataset(
+                        parent_data, None, foc, pos, split["type"]
+                    )
+                    if self.data_effect is not None:
+                        data_effect_1, data_effect_2 = self.split_dataset(
+                            parent_data, parent_data_effect, foc, pos, split["type"]
+                        )
+                    else:
+                        data_effect_1, data_effect_2 = None, None
 
-                data_new = data_1 if j % 2 == 0 else data_2
-                data_effect_new = data_effect_1 if j % 2 == 0 else data_effect_2
-                if j % 2 == 0:
-                    if split["type"] == "cat":
-                        name = foc_name + " == {}".format(pos_small)
-                        comparison = "=="
+                    data_new = data_1 if j % 2 == 0 else data_2
+                    data_effect_new = data_effect_1 if j % 2 == 0 else data_effect_2
+                    comparison = "<=" if j % 2 == 0 else ">"
+                    name = f"{foc_name} {comparison} {pos_text}"
+                elif cur_split_n_regions == 3:
+                    pos1, pos2 = split["position"]
+                    pos1_scaled = (
+                        pos1.round(2)
+                        if scale_x_list is None
+                        else (
+                            scale_x_list[foc]["std"] * pos1 + scale_x_list[foc]["mean"]
+                        ).round(2)
+                    )
+                    pos2_scaled = (
+                        pos2.round(2)
+                        if scale_x_list is None
+                        else (
+                            scale_x_list[foc]["std"] * pos2 + scale_x_list[foc]["mean"]
+                        ).round(2)
+                    )
+                    data_1, data_2, data_3 = self.split_dataset_2(
+                        parent_data, None, foc, pos1, pos2
+                    )
+                    if self.data_effect is not None:
+                        data_effect_1, data_effect_2, data_effect_3 = (
+                            self.split_dataset_2(
+                                parent_data, parent_data_effect, foc, pos1, pos2
+                            )
+                        )
                     else:
-                        name = foc_name + " <= {}".format(pos_small)
-                        comparison = "<="
+                        data_effect_1, data_effect_2, data_effect_3 = None, None, None
+
+                    if j % 3 == 0:
+                        data_new, data_effect_new, comparison = (
+                            data_1,
+                            data_effect_1,
+                            f"< {pos1_scaled}",
+                        )
+                    elif j % 3 == 1:
+                        data_new, data_effect_new, comparison = (
+                            data_2,
+                            data_effect_2,
+                            f">= {pos1_scaled} and <= {pos2_scaled}",
+                        )
+                    elif j % 3 == 2:
+                        data_new, data_effect_new, comparison = (
+                            data_3,
+                            data_effect_3,
+                            f"> {pos2_scaled}",
+                        )
+                    else:
+                        raise ValueError("j % 3 must be 0, 1 or 2")
+                    name = f"{foc_name} {comparison}"
                 else:
-                    if split["type"] == "cat":
-                        name = foc_name + " != {}".format(pos_small)
-                        comparison = "!="
-                    else:
-                        name = foc_name + "  > {}".format(pos_small)
-                        comparison = ">"
+                    raise ValueError("cur_split_n_regions must be 2 or 3")
 
                 name = (
                     parent_name + " | " + name
-                    if nodes_to_add == 2
+                    if nodes_to_add in [2, 3]
                     else parent_name + " and " + name
                 )
 
@@ -635,15 +676,12 @@ class Regions:
 
                 tree.add_node(name, parent_name=parent_name, data=data, level=i + 1)
 
-                new_parent_level_nodes.append(name)
-                new_parent_level_data.append(data_new)
-                new_parent_level_data_effect.append(data_effect_new)
+                parent_level_nodes.append(name)
+                parent_level_data.append(data_new)
+                parent_level_data_effect.append(data_effect_new)
 
-            # update parent_level_nodes
-            parent_level_nodes = new_parent_level_nodes
-            parent_level_data = new_parent_level_data
-            parent_level_data_effect = new_parent_level_data
-
+            prev_nodes_added = nodes_to_add
+            prev_nodes_start_idx = len(parent_level_nodes) - nodes_to_add
         return tree
 
 
@@ -729,12 +767,10 @@ class Tree:
         self.nodes.append(node)
 
     def get_node(self, name):
-        node = None
-        for node_i in self.nodes:
-            if node_i.name == name:
-                node = node_i
-                break
-        return node
+        for node in self.nodes:
+            if node.name == name:
+                return node
+        return None
 
     def get_level_nodes(self, level):
         nodes = []
@@ -744,21 +780,14 @@ class Tree:
         return nodes
 
     def get_root(self):
-        node = None
-        for node_i in self.nodes:
-            if node_i.parent_node is None:
-                node = node_i
-                break
-        assert node is not None
-        return node
+        for node in self.nodes:
+            if node.parent_node is None:
+                return node
+        raise ValueError("Root node not found.")
 
     def get_children(self, name):
-        children = []
-        for node_i in self.nodes:
-            if node_i.parent_node is not None:
-                if node_i.parent_node.name == name:
-                    children.append(node_i)
-        return children
+        parent_node = self.get_node(name)
+        return [node for node in self.nodes if node.parent_node == parent_node]
 
     def get_level_stats(self, level):
         level_nodes = self.get_level_nodes(level)

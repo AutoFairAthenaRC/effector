@@ -126,9 +126,8 @@ class RegionalEffectBase:
         # apply partitioning
         regions.search_all_splits()
         regions.choose_important_splits()
-        if regions_check == -1:
-            self.tree_full["feature_{}".format(feature)] = regions.splits_to_tree()
-            self.tree_pruned["feature_{}".format(feature)] = regions.splits_to_tree(True)
+        self.tree_full["feature_{}".format(feature)] = regions.splits_to_tree()
+        self.tree_pruned["feature_{}".format(feature)] = regions.splits_to_tree(True)
 
         # store the partitioning object
         self.partitioners["feature_{}".format(feature)] = regions
@@ -269,7 +268,6 @@ class RegionalEffectBase:
         feature_names = copy.deepcopy(self.feature_names)
         feature_names[feature] = name
         fe_method = self._create_fe_object(data, data_effect, feature_names)
-
         return fe_method.plot(
             feature=feature,
             heterogeneity=heterogeneity,
