@@ -133,6 +133,11 @@ class Regions:
                 # split data and data_effect based on the optimal split found above
                 feat, pos, typ = split["feature"], split["position"], split["type"]
 
+                # find and delete from foc, foc_types the selected feature
+                feat_idx = level_foc.index(feat)
+                level_foc.pop(feat_idx)
+                level_foc_types.pop(feat_idx)
+
                 if x_jac_list is not None:
                     if typ == "cat" or type(pos) != tuple:
                         x_jac_list = self.flatten_list(
