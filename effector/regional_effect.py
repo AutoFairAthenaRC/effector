@@ -312,6 +312,19 @@ class RegionalEffectBase:
                 print("No splits found for feature {}".format(feat))
             else:
                 tree_dict.show_level_stats()
+            print()
+
+    def get_tree_nodes_indices(self, feature, only_important=True):
+        self.refit(feature)
+        if only_important:
+            return [
+                node.idx
+                for node in self.tree_pruned["feature_{}".format(feature)].nodes
+            ]
+        else:
+            return [
+                node.idx for node in self.tree_full["feature_{}".format(feature)].nodes
+            ]
 
     def describe_subregions(
         self,
