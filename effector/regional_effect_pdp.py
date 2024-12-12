@@ -82,6 +82,7 @@ class RegionalPDPBase(RegionalEffectBase):
                     xs=xx,
                     heterogeneity=True,
                     use_vectorized=use_vectorized,
+                    centering=centering,
                 )
             except:
                 return BIG_M
