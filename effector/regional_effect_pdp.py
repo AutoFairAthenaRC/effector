@@ -68,7 +68,6 @@ class RegionalPDPBase(RegionalEffectBase):
                     centering=centering,
                     points_for_centering=points_for_centering,
                     use_vectorized=use_vectorized,
-                    centering=centering,
                 )
             except:
                 return BIG_M
