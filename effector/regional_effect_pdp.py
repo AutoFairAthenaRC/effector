@@ -105,6 +105,8 @@ class RegionalPDPBase(RegionalEffectBase):
         points_for_centering: int = 100,
         use_vectorized: bool = True,
         regions_check: int = -1,
+        global_drop: bool = False,
+        early_stop: bool = True,
     ):
         """
         Find the Regional PDP for a list of features.
@@ -143,6 +145,8 @@ class RegionalPDPBase(RegionalEffectBase):
                 candidate_conditioning_features,
                 split_categorical_features,
                 regions_check,
+                global_drop,
+                early_stop,
             )
 
             # todo add methdod args

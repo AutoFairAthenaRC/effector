@@ -99,6 +99,8 @@ class RegionalEffectBase:
         candidate_foc: Union[str, List] = "all",
         split_categorical_features: bool = False,
         regions_check: int = -1,
+        global_drop: bool = False,
+        early_stop: bool = True,
     ):
         """
         Find the subregions for a single feature.
@@ -121,6 +123,8 @@ class RegionalEffectBase:
             heter_small_enough,
             split_categorical_features,
             regions_check,
+            global_drop,
+            early_stop,
         )
 
         # apply partitioning

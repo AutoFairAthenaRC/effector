@@ -104,6 +104,8 @@ class RegionalRHALE(RegionalEffectBase):
         ] = "greedy",
         centering: typing.Union[bool, str] = False,
         regions_check: int = -1,
+        global_drop: bool = False,
+        early_stop: bool = True,
     ):
         """
         Find the Regional RHALE for a list of features.
@@ -137,6 +139,8 @@ class RegionalRHALE(RegionalEffectBase):
                 candidate_conditioning_features,
                 split_categorical_features,
                 regions_check=regions_check,
+                global_drop=global_drop,
+                early_stop=early_stop,
             )
 
             self.method_args["feature_" + str(feat)] = {

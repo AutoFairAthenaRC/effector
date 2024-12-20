@@ -28,6 +28,8 @@ class Regions:
         heter_small_enough=0.1,
         split_categorical_features=False,
         regions_check: int = -1,
+        global_drop: bool = False,
+        early_stop: bool = True,
     ):
         # setters
         self.feature = feature
@@ -74,6 +76,9 @@ class Regions:
         # state variable
         self.split_found: bool = False
         self.important_splits_selected: bool = False
+
+        self.global_drop = global_drop
+        self.early_stop = early_stop
 
     def search_all_splits(self):
         """
@@ -123,7 +128,11 @@ class Regions:
                 split = self.single_level_splits(
                     x_list,
                     x_jac_list,
-                    splits[-1]["heterogeneity"],
+                    (
+                        [heter_init] * len(x_list)
+                        if self.global_drop
+                        else splits[-1]["heterogeneity"]
+                    ),
                     regions_check=self.regions_check,
                     foc=level_foc.copy(),
                     foc_types=level_foc_types.copy(),
@@ -166,10 +175,31 @@ class Regions:
                     )
 
                 self.splits = splits
+                if self.early_stop and self.valid_level_split(lev + 1) == 0:
+                    break
 
         # update state
         self.split_found = True
         return self.splits
+
+    def valid_level_split(self, level):
+        # level is 0 - base where 0 is the initial dataset
+        assert level > 0, "level must be greater than 0"
+
+        if len(self.splits) == 0 or self.splits[0]["weighted_heter"] == BIG_M:
+            return False
+        else:
+            if self.global_drop:
+                prev_heter = self.splits[0]["weighted_heter"]
+            else:
+                prev_heter = self.splits[level - 1]["weighted_heter"]
+
+            cur_heter = self.splits[level]["weighted_heter"]
+            heter_drop = (prev_heter - cur_heter) / prev_heter
+            if heter_drop > self.heter_pcg_drop_thres:
+                return True
+            else:
+                return False
 
     def single_level_splits(
         self,
@@ -270,6 +300,7 @@ class Regions:
 
                     weighted_heter_drop_2[i, j] = np.sum(heter_drop * weights)
                     weighted_heter_2[i, j] = np.sum(weights * np.array(sub_heter))
+
             if foc_types[i] != "cat" and regions_check >= 0:
                 for j, position1 in enumerate(candidate_split_positions[i]):
                     for k, position2 in enumerate(
@@ -303,6 +334,7 @@ class Regions:
                                 heter_func(x, x_jac)
                                 for x, x_jac in zip(x_list_2, x_jac_list_2)
                             ]
+
                         # heter_drop: list with the heterogeneity drop after split of foc_i at position j and k
                         heter_drop = np.array(
                             self.flatten_list(
@@ -379,6 +411,8 @@ class Regions:
             init_weghted_heter_2 = weighted_heter_drop_2[i, j] + weighted_heter_2[i, j]
             weighted_heter_drop_ratio_2 = (
                 weighted_heter_drop_2[i, j] / init_weghted_heter_2
+                if init_weghted_heter_2 != 0
+                else 0
             )
 
             split_2 = {
@@ -432,6 +466,8 @@ class Regions:
             )
             weighted_heter_drop_ratio_3 = (
                 weighted_heter_drop_3[ii, jj, kk] / init_weghted_heter_3
+                if init_weghted_heter_3 != 0
+                else 0
             )
 
             split_3 = {
@@ -468,7 +504,12 @@ class Regions:
 
             # accept split if heterogeneity drops over 20%
             heter = np.array([splits[i]["weighted_heter"] for i in range(len(splits))])
-            heter_drop = (heter[:-1] - heter[1:]) / heter[:-1]
+
+            if self.global_drop:
+                heter_drop = (heter[0] - heter[1:]) / heter[0]
+            else:
+                heter_drop = (heter[:-1] - heter[1:]) / heter[:-1]
+
             split_valid = heter_drop > self.heter_pcg_drop_thres
 
             # if all are negative, return nothing
@@ -478,14 +519,20 @@ class Regions:
             elif np.sum(split_valid) == len(split_valid):
                 optimal_splits = splits[1:]
             else:
-                # find first negative split
-                first_negative = np.where(split_valid == False)[0][0]
+                if self.early_stop:
+                    # find first negative split
+                    first_negative = np.where(split_valid == False)[0][0]
 
-                # if first negative is the first split, return nothing
-                if first_negative == 0:
-                    optimal_splits = {}
+                    # if first negative is the first split, return nothing
+                    if first_negative == 0:
+                        optimal_splits = {}
+                    else:
+                        optimal_splits = splits[1 : first_negative + 1]
                 else:
-                    optimal_splits = splits[1 : first_negative + 1]
+                    # find last negative split
+                    max_valid_idx = np.where(split_valid)[0].max()
+                    # return all splits up to the last negative
+                    optimal_splits = splits[1 : max_valid_idx + 2]
 
         # update state variable
         self.important_splits_selected = True
