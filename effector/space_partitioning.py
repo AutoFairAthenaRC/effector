@@ -10,13 +10,15 @@ BIG_M = helpers.BIG_M
 
 class Best:
     def __init__(
-            self,
-            min_heterogeneity_decrease_pcg: float = 0.1,
-            heter_small_enough: float = 0.0,
-            max_depth: int = 2,
-            min_samples_leaf: int = 10,
-            numerical_features_grid_size: int = 20,
-            search_partitions_when_categorical: bool = False,
+        self,
+        min_heterogeneity_decrease_pcg: float = 0.1,
+        heter_small_enough: float = 0.0,
+        max_depth: int = 2,
+        min_samples_leaf: int = 10,
+        numerical_features_grid_size: int = 20,
+        search_partitions_when_categorical: bool = False,
+        global_drop: bool = False,
+        early_stop: bool = True,
     ):
         """Choose the algorithm `Best`.
         The algorithm is a greedy algorithm that finds the best split for each level in a greedy fashion.
@@ -99,20 +101,24 @@ class Best:
         self.split_found: bool = False
         self.important_splits_selected: bool = False
 
+        self.global_drop = global_drop
+        self.early_stop = early_stop
+
     def _prapare_data(self, data):
         pass
 
-    def find_subregions(self,
-                        feature: int,
-                        data: np.ndarray,
-                        heter_func: callable,
-                        axis_limits: np.ndarray,
-                        feature_types: typing.Union[list, None] = None,
-                        categorical_limit: int = 10,
-                        candidate_conditioning_features: typing.Union[None, list] = None,
-                        feature_names: typing.Union[None, list] = None,
-                        target_name: typing.Union[None, str] = None
-                        ):
+    def find_subregions(
+        self,
+        feature: int,
+        data: np.ndarray,
+        heter_func: callable,
+        axis_limits: np.ndarray,
+        feature_types: typing.Union[list, None] = None,
+        categorical_limit: int = 10,
+        candidate_conditioning_features: typing.Union[None, list] = None,
+        feature_names: typing.Union[None, list] = None,
+        target_name: typing.Union[None, str] = None,
+    ):
         self.feature = feature
         self.foi = feature
         self.data = data
@@ -129,14 +135,19 @@ class Best:
             else candidate_conditioning_features
         )
 
-        self.feature_types = utils.get_feature_types(data, categorical_limit) if feature_types is None else feature_types
+        self.feature_types = (
+            utils.get_feature_types(data, categorical_limit)
+            if feature_types is None
+            else feature_types
+        )
 
         # on-init
-        self.foc_types = [self.feature_types[i] for i in self.candidate_conditioning_features]
+        self.foc_types = [
+            self.feature_types[i] for i in self.candidate_conditioning_features
+        ]
 
         self.search_all_splits()
         self.choose_important_splits()
-
 
     def search_all_splits(self):
         """
@@ -169,7 +180,12 @@ class Best:
                 # TODO: check this, as it seems redundant;
                 # if any subregion had less than min_points, the
                 # specific split should not have been selected
-                if any([np.sum(x) < self.min_points_per_subregion for x in splits[-1]["after_split_active_indices_list"]]):
+                if any(
+                    [
+                        np.sum(x) < self.min_points_per_subregion
+                        for x in splits[-1]["after_split_active_indices_list"]
+                    ]
+                ):
                     break
 
                 # find optimal split
@@ -177,6 +193,9 @@ class Best:
                     splits[-1]["after_split_active_indices_list"]
                 )
                 splits.append(new_split)
+                if self.early_stop and not self.valid_level_split(splits, lev + 1):
+                    break
+
             self.splits = splits
 
         # update state
@@ -197,32 +216,55 @@ class Best:
 
         # matrix_weighted_heter[i,j] (i index of ccf and j index of split position) is
         # the accumulated heterogeneity if I split ccf[i] at index j
-        matrix_weighted_heter = np.ones([
-            len(self.candidate_conditioning_features),
-            max(self.nof_candidate_splits_for_numerical-1, self.cat_limit)
-        ]) * BIG_M
+        matrix_weighted_heter = (
+            np.ones(
+                [
+                    len(self.candidate_conditioning_features),
+                    max(self.nof_candidate_splits_for_numerical - 1, self.cat_limit),
+                ]
+            )
+            * BIG_M
+        )
 
         # list with len(ccf) elements
         # each element is a list with the split positions for the corresponding feature of conditioning
-        candidate_split_positions = [(self.find_positions_cat(data, foc_i) if foc_types[i] == "cat" else self.find_positions_cont(foc_i, nof_splits)) for i, foc_i in enumerate(self.candidate_conditioning_features)]
+        candidate_split_positions = [
+            (
+                self.find_positions_cat(data, foc_i)
+                if foc_types[i] == "cat"
+                else self.find_positions_cont(foc_i, nof_splits)
+            )
+            for i, foc_i in enumerate(self.candidate_conditioning_features)
+        ]
 
         # exhaustive search on all split positions
         for i, foc_i in enumerate(self.candidate_conditioning_features):
             for j, position in enumerate(candidate_split_positions[i]):
-                after_split_active_indices_list = self.flatten_list([ self.split_dataset(active_indices, foc_i, position, foc_types[i])
-                    for active_indices in before_split_active_indices_list
-                ])
+                after_split_active_indices_list = self.flatten_list(
+                    [
+                        self.split_dataset(
+                            active_indices, foc_i, position, foc_types[i]
+                        )
+                        for active_indices in before_split_active_indices_list
+                    ]
+                )
 
-                heter_list_after_split = [heter_func(x) for x in after_split_active_indices_list]
+                heter_list_after_split = [
+                    heter_func(x) for x in after_split_active_indices_list
+                ]
 
                 # populations: list with the number of instances in each dataset after split of foc_i at position j
-                populations = np.array([np.sum(x) for x in after_split_active_indices_list])
+                populations = np.array(
+                    [np.sum(x) for x in after_split_active_indices_list]
+                )
 
                 # after_split_weight_list analogous to the populations in each split
                 after_split_weight_list = (populations + 1) / (np.sum(populations + 1))
 
                 # first: computed the weighted heterogeneity after the split
-                after_split_weighted_heter = np.sum(after_split_weight_list * np.array(heter_list_after_split))
+                after_split_weighted_heter = np.sum(
+                    after_split_weight_list * np.array(heter_list_after_split)
+                )
 
                 # matrix_weighted_heter[i,j] is the weighted accumulated heterogeneity if I split ccf[i] at index j
                 matrix_weighted_heter[i, j] = after_split_weighted_heter
@@ -235,7 +277,12 @@ class Best:
         position = candidate_split_positions[i][j]
         split_positions = candidate_split_positions[i]
 
-        after_split_active_indices_list = self.flatten_list([self.split_dataset(active_indices, ccf[i], position, foc_types[i]) for active_indices in before_split_active_indices_list])
+        after_split_active_indices_list = self.flatten_list(
+            [
+                self.split_dataset(active_indices, ccf[i], position, foc_types[i])
+                for active_indices in before_split_active_indices_list
+            ]
+        )
 
         nof_instances_l = [np.sum(x) for x in after_split_active_indices_list]
 
@@ -250,16 +297,33 @@ class Best:
             "split_j": j,
             "candidate_split_positions": split_positions,
             "candidate_conditioning_features": ccf,
-
             "after_split_nof_instances": nof_instances_l,
             "after_split_heter_list": after_split_heter_l,
             "after_split_active_indices_list": after_split_active_indices_list,
             "after_split_weighted_heter": matrix_weighted_heter[i, j],
-
             # "matrix_weighted_heter_drop": matrix_weighted_heter_drop,
             "matrix_weighted_heter": matrix_weighted_heter,
         }
         return split
+
+    def valid_level_split(self, splits, level):
+        # level is 0 - base where 0 refers to no split
+        assert level > 0, "level must be greater than 0"
+
+        if len(splits) == 0 or splits[0]["after_split_weighted_heter"] == BIG_M:
+            return False
+        else:
+            if self.global_drop:
+                prev_heter = splits[0]["after_split_weighted_heter"]
+            else:
+                prev_heter = splits[level - 1]["after_split_weighted_heter"]
+
+            cur_heter = splits[level]["after_split_weighted_heter"]
+            heter_drop = (prev_heter - cur_heter) / prev_heter
+            if heter_drop > self.heter_pcg_drop_thres:
+                return True
+            else:
+                return False
 
     def choose_important_splits(self):
         assert self.split_found, "No splits found for feature {}".format(self.feature)
@@ -277,8 +341,15 @@ class Best:
             splits = self.splits
 
             # accept split if heterogeneity drops over 20%
-            heter = np.array([splits[i]["after_split_weighted_heter"] for i in range(len(splits))])
-            heter_drop = (heter[:-1] - heter[1:]) / heter[:-1]
+            heter = np.array(
+                [splits[i]["after_split_weighted_heter"] for i in range(len(splits))]
+            )
+
+            if self.global_drop:
+                heter_drop = (heter[0] - heter[1:]) / heter[0]
+            else:
+                heter_drop = (heter[:-1] - heter[1:]) / heter[:-1]
+
             split_valid = heter_drop > self.heter_pcg_drop_thres
 
             # if all are negative, return nothing
@@ -288,14 +359,28 @@ class Best:
             elif np.sum(split_valid) == len(split_valid):
                 optimal_splits = splits[1:]
             else:
-                # find first negative split
-                first_negative = np.where(split_valid == False)[0][0]
+                # # find first negative split
+                # first_negative = np.where(split_valid == False)[0][0]
 
-                # if first negative is the first split, return nothing
-                if first_negative == 0:
-                    optimal_splits = {}
+                # # if first negative is the first split, return nothing
+                # if first_negative == 0:
+                #     optimal_splits = {}
+                # else:
+                #     optimal_splits = splits[1 : first_negative + 1]
+                if self.early_stop:
+                    # find first negative split
+                    first_negative = np.where(split_valid == False)[0][0]
+
+                    # if first negative is the first split, return nothing
+                    if first_negative == 0:
+                        optimal_splits = {}
+                    else:
+                        optimal_splits = splits[1 : first_negative + 1]
                 else:
-                    optimal_splits = splits[1 : first_negative + 1]
+                    # find last negative split
+                    max_valid_idx = np.where(split_valid)[0].max()
+                    # return all splits up to the last negative
+                    optimal_splits = splits[1 : max_valid_idx + 2]
 
         # update state variable
         self.important_splits_selected = True
@@ -324,7 +409,7 @@ class Best:
     def find_positions_cont(self, feature, nof_splits):
         start = self.axis_limits[0, feature]
         stop = self.axis_limits[1, feature]
-        pos = np.linspace(start, stop, nof_splits+1)
+        pos = np.linspace(start, stop, nof_splits + 1)
         return pos[1:-1]
 
     def flatten_list(self, l):
@@ -383,10 +468,14 @@ class Best:
 
                 active_indices_1, active_indices_2 = self.split_dataset(
                     parent_active_indices,
-                    foc, pos, split["foc_type"],
-                    )
+                    foc,
+                    pos,
+                    split["foc_type"],
+                )
 
-                active_indices_new = active_indices_1 if j % 2 == 0 else active_indices_2
+                active_indices_new = (
+                    active_indices_1 if j % 2 == 0 else active_indices_2
+                )
                 if j % 2 == 0:
                     if split["foc_type"] == "cat":
                         name = foc_name + " == {}".format(pos_small)
@@ -410,7 +499,8 @@ class Best:
 
                 data = {
                     "heterogeneity": split["after_split_heter_list"][j],
-                    "weight": float(split["after_split_nof_instances"][j]) / nof_instances,
+                    "weight": float(split["after_split_nof_instances"][j])
+                    / nof_instances,
                     "position": split["foc_split_position"],
                     "foc_name": foc_name,
                     "feature": split["foc_index"],
@@ -440,10 +530,17 @@ class Best:
         heter_matr[heter_matr > 1e6] = np.nan
 
         plt.figure()
-        plt.title("split {}, parent heter: {:.2f}".format(split_ind, self.splits[split_ind - 1]["after_split_weighted_heter"]))
+        plt.title(
+            "split {}, parent heter: {:.2f}".format(
+                split_ind, self.splits[split_ind - 1]["after_split_weighted_heter"]
+            )
+        )
         plt.imshow(heter_matr)
         plt.colorbar()
-        plt.yticks([i for i in range(len(self.candidate_conditioning_features))], [self.feature_names[foc] for foc in self.candidate_conditioning_features])
+        plt.yticks(
+            [i for i in range(len(self.candidate_conditioning_features))],
+            [self.feature_names[foc] for foc in self.candidate_conditioning_features],
+        )
         plt.show(block=False)
 
 
