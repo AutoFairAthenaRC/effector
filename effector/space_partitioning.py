@@ -19,6 +19,7 @@ class Best:
         search_partitions_when_categorical: bool = False,
         global_drop: bool = False,
         early_stop: bool = True,
+        regions_3: bool = False,
     ):
         """Choose the algorithm `Best`.
         The algorithm is a greedy algorithm that finds the best split for each level in a greedy fashion.
@@ -64,6 +65,9 @@ class Best:
                 ??? Note "Default is `False`"
                     It is difficult to compute the heterogeneity for categorical features, so by default, the algorithm will not search for partitions when the feature of interest is categorical.
 
+            regions_3:
+                False -> checks 2 regions
+                True -> checks 3 regions
         """
         # setters
         self.min_points_per_subregion = min_samples_leaf
@@ -103,6 +107,7 @@ class Best:
 
         self.global_drop = global_drop
         self.early_stop = early_stop
+        self.regions_3 = regions_3
 
     def _prapare_data(self, data):
         pass
@@ -213,10 +218,11 @@ class Best:
         heter_func = self.heter_func
 
         data = self.data
+        regions_3 = self.regions_3
 
         # matrix_weighted_heter[i,j] (i index of ccf and j index of split position) is
         # the accumulated heterogeneity if I split ccf[i] at index j
-        matrix_weighted_heter = (
+        matrix_weighted_heter_2 = (
             np.ones(
                 [
                     len(self.candidate_conditioning_features),
@@ -224,6 +230,18 @@ class Best:
                 ]
             )
             * BIG_M
+        )
+        matrix_weighted_heter_3 = (
+            np.ones(
+                [
+                    len(self.candidate_conditioning_features),
+                    max(self.nof_candidate_splits_for_numerical - 1, self.cat_limit),
+                    max(self.nof_candidate_splits_for_numerical - 1, self.cat_limit),
+                ]
+            )
+            * BIG_M
+            if regions_3
+            else None
         )
 
         # list with len(ccf) elements
@@ -239,49 +257,115 @@ class Best:
 
         # exhaustive search on all split positions
         for i, foc_i in enumerate(self.candidate_conditioning_features):
-            for j, position in enumerate(candidate_split_positions[i]):
-                after_split_active_indices_list = self.flatten_list(
-                    [
-                        self.split_dataset(
-                            active_indices, foc_i, position, foc_types[i]
-                        )
-                        for active_indices in before_split_active_indices_list
+            if foc_types[i] == "cat" or not regions_3:
+                for j, position in enumerate(candidate_split_positions[i]):
+                    after_split_active_indices_list = self.flatten_list(
+                        [
+                            self.split_dataset(
+                                active_indices, foc_i, position, foc_types[i]
+                            )
+                            for active_indices in before_split_active_indices_list
+                        ]
+                    )
+
+                    heter_list_after_split = [
+                        heter_func(x) for x in after_split_active_indices_list
                     ]
-                )
 
-                heter_list_after_split = [
-                    heter_func(x) for x in after_split_active_indices_list
-                ]
+                    # populations: list with the number of instances in each dataset after split of foc_i at position j
+                    populations = np.array(
+                        [np.sum(x) for x in after_split_active_indices_list]
+                    )
 
-                # populations: list with the number of instances in each dataset after split of foc_i at position j
-                populations = np.array(
-                    [np.sum(x) for x in after_split_active_indices_list]
-                )
+                    # after_split_weight_list analogous to the populations in each split
+                    after_split_weight_list = (populations + 1) / (
+                        np.sum(populations + 1)
+                    )
 
-                # after_split_weight_list analogous to the populations in each split
-                after_split_weight_list = (populations + 1) / (np.sum(populations + 1))
+                    # first: computed the weighted heterogeneity after the split
+                    after_split_weighted_heter = np.sum(
+                        after_split_weight_list * np.array(heter_list_after_split)
+                    )
 
-                # first: computed the weighted heterogeneity after the split
-                after_split_weighted_heter = np.sum(
-                    after_split_weight_list * np.array(heter_list_after_split)
-                )
+                    # matrix_weighted_heter[i,j] is the weighted accumulated heterogeneity if I split ccf[i] at index j
+                    matrix_weighted_heter_2[i, j] = after_split_weighted_heter
+            else:
+                for j, position1 in enumerate(candidate_split_positions[i]):
+                    for k, position2 in enumerate(
+                        candidate_split_positions[i][j + 1 :]
+                    ):
 
-                # matrix_weighted_heter[i,j] is the weighted accumulated heterogeneity if I split ccf[i] at index j
-                matrix_weighted_heter[i, j] = after_split_weighted_heter
+                        # split datasets
+                        after_split_active_indices_list = self.flatten_list(
+                            [
+                                self.split_dataset_2(
+                                    active_indices, foc_i, position1, position2
+                                )
+                                for active_indices in before_split_active_indices_list
+                            ]
+                        )
+
+                        # sub_heter: list with the heterogeneity after split of foc_i at position j and k
+                        heter_list_after_split = [
+                            heter_func(x) for x in after_split_active_indices_list
+                        ]
+
+                        # populations: list with the number of instances in each dataset after split of foc_i at position j
+                        populations = np.array(
+                            [len(xx) for xx in after_split_active_indices_list]
+                        )
+                        # weights analogous to the populations in each split
+                        after_split_weight_list = (populations + 1) / (
+                            np.sum(populations + 1)
+                        )
+                        pos_2_idx = j + k + 1
+                        matrix_weighted_heter_3[i, j, pos_2_idx] = np.sum(
+                            after_split_weight_list * np.array(heter_list_after_split)
+                        )
 
         # find the split with the largest weighted heterogeneity drop
         i, j = np.unravel_index(
-            np.argmin(matrix_weighted_heter, axis=None), matrix_weighted_heter.shape
+            np.argmin(matrix_weighted_heter_2, axis=None), matrix_weighted_heter_2.shape
         )
+
+        min_weighted_heter2 = BIG_M
+        if not regions_3 or "cat" in foc_types:
+            i, j = np.unravel_index(
+                np.argmin(matrix_weighted_heter_2, axis=None),
+                matrix_weighted_heter_2.shape,
+            )
+            min_weighted_heter2 = matrix_weighted_heter_2[i, j]
+
+        min_weighted_heter3 = BIG_M
+        if regions_3:
+            ii, jj, kk = np.unravel_index(
+                np.argmin(matrix_weighted_heter_3, axis=None),
+                matrix_weighted_heter_3.shape,
+            )
+            min_weighted_heter3 = matrix_weighted_heter_3[ii, jj, kk]
+
+        regions_2_is_best = min_weighted_heter2 <= min_weighted_heter3
+        i, j, k = (i, j, None) if regions_2_is_best else (ii, jj, kk)
+
         feature = ccf[i]
-        position = candidate_split_positions[i][j]
+        position1 = candidate_split_positions[i][j]
+        position2 = None if regions_2_is_best else candidate_split_positions[i][k]
         split_positions = candidate_split_positions[i]
 
-        after_split_active_indices_list = self.flatten_list(
-            [
-                self.split_dataset(active_indices, ccf[i], position, foc_types[i])
-                for active_indices in before_split_active_indices_list
-            ]
+        after_split_active_indices_list = (
+            self.flatten_list(
+                [
+                    self.split_dataset(active_indices, ccf[i], position1, foc_types[i])
+                    for active_indices in before_split_active_indices_list
+                ]
+            )
+            if regions_2_is_best
+            else self.flatten_list(
+                [
+                    self.split_dataset_2(active_indices, ccf[i], position1, position2)
+                    for active_indices in before_split_active_indices_list
+                ]
+            )
         )
 
         nof_instances_l = [np.sum(x) for x in after_split_active_indices_list]
@@ -290,7 +374,9 @@ class Best:
         after_split_heter_l = [heter_func(ai) for ai in after_split_active_indices_list]
         split = {
             "foc_index": ccf[i],
-            "foc_split_position": position,
+            "foc_split_position": (
+                position1 if regions_2_is_best else (position1, position2)
+            ),
             "foc_range": [np.min(data[:, feature]), np.max(data[:, feature])],
             "foc_type": foc_types[i],
             "split_i": i,
@@ -300,10 +386,21 @@ class Best:
             "after_split_nof_instances": nof_instances_l,
             "after_split_heter_list": after_split_heter_l,
             "after_split_active_indices_list": after_split_active_indices_list,
-            "after_split_weighted_heter": matrix_weighted_heter[i, j],
+            "after_split_weighted_heter": (
+                matrix_weighted_heter_2[i, j]
+                if regions_2_is_best
+                else matrix_weighted_heter_3[ii, jj, kk]
+            ),
             # "matrix_weighted_heter_drop": matrix_weighted_heter_drop,
-            "matrix_weighted_heter": matrix_weighted_heter,
+            "matrix_weighted_heter": (
+                matrix_weighted_heter_2
+                if regions_2_is_best
+                else matrix_weighted_heter_3
+            ),
         }
+        if not regions_2_is_best:
+            split["split_k"] = k
+
         return split
 
     def valid_level_split(self, splits, level):
@@ -403,6 +500,21 @@ class Best:
         active_indices_2 = np.logical_and(active_indices_2, ind_2)
         return active_indices_1, active_indices_2
 
+    def split_dataset_2(self, active_indices, feature, position1, position2):
+        ind_1 = self.data[:, feature] < position1
+        ind_2 = (self.data[:, feature] >= position1) & (
+            self.data[:, feature] <= position2
+        )
+        ind_3 = self.data[:, feature] > position2
+
+        active_indices_1 = np.copy(active_indices)
+        active_indices_2 = np.copy(active_indices)
+        active_indices_3 = np.copy(active_indices)
+        active_indices_1 = np.logical_and(active_indices_1, ind_1)
+        active_indices_2 = np.logical_and(active_indices_2, ind_2)
+        active_indices_3 = np.logical_and(active_indices_3, ind_3)
+        return active_indices_1, active_indices_2, active_indices_3
+
     def find_positions_cat(self, x, feature):
         return np.unique(x[:, feature])
 
@@ -436,11 +548,16 @@ class Best:
         parent_level_nodes = [feature_name]
         parent_level_active_indices = [np.ones((self.data.shape[0]))]
         splits = self.important_splits if only_important else self.splits[1:]
+        prev_nodes_added = 1
+        prev_nodes_start_idx = 0
 
         for i, split in enumerate(splits):
 
             # nof nodes to add
             nodes_to_add = len(split["after_split_nof_instances"])
+
+            # how many regions are created by the split
+            cur_split_n_regions = nodes_to_add / prev_nodes_added
 
             new_parent_level_nodes = []
 
@@ -448,52 +565,91 @@ class Best:
 
             # find parent
             for j in range(nodes_to_add):
-                parent_name = parent_level_nodes[int(j / 2)]
-
-                parent_active_indices = parent_level_active_indices[int(j / 2)]
+                parent_idx = prev_nodes_start_idx + int(j / cur_split_n_regions)
+                parent_name = parent_level_nodes[parent_idx]
+                parent_active_indices = parent_level_active_indices[parent_idx]
 
                 # prepare data
 
                 foc_name = self.feature_names[split["foc_index"]]
                 foc = split["foc_index"]
-                pos = split["foc_split_position"]
-                if scale_x_list is not None:
-                    mean = scale_x_list[foc]["mean"]
-                    std = scale_x_list[foc]["std"]
-                    pos_scaled = std * split["foc_split_position"] + mean
-                else:
-                    pos_scaled = pos
 
-                pos_small = pos_scaled.round(2)
+                if cur_split_n_regions == 2:
+                    pos = split["foc_split_position"]
+                    pos_small = (
+                        pos.round(2)
+                        if scale_x_list is None
+                        else (
+                            scale_x_list[foc]["std"] * pos + scale_x_list[foc]["mean"]
+                        ).round(2)
+                    )
 
-                active_indices_1, active_indices_2 = self.split_dataset(
-                    parent_active_indices,
-                    foc,
-                    pos,
-                    split["foc_type"],
-                )
+                    active_indices_1, active_indices_2 = self.split_dataset(
+                        parent_active_indices,
+                        foc,
+                        pos,
+                        split["foc_type"],
+                    )
 
-                active_indices_new = (
-                    active_indices_1 if j % 2 == 0 else active_indices_2
-                )
-                if j % 2 == 0:
-                    if split["foc_type"] == "cat":
-                        name = foc_name + " == {}".format(pos_small)
-                        comparison = "=="
+                    active_indices_new = (
+                        active_indices_1 if j % 2 == 0 else active_indices_2
+                    )
+
+                    if j % 2 == 0:
+                        comparison = "==" if split["foc_type"] == "cat" else "<="
                     else:
-                        name = foc_name + " <= {}".format(pos_small)
-                        comparison = "<="
-                else:
-                    if split["foc_type"] == "cat":
-                        name = foc_name + " != {}".format(pos_small)
-                        comparison = "!="
+                        comparison = "!=" if split["foc_type"] == "cat" else ">"
+
+                    name = f"{foc_name} {comparison} {pos_small}"
+
+                elif cur_split_n_regions == 3:
+                    pos1, pos2 = split["foc_split_position"]
+                    pos1_small = (
+                        pos1.round(2)
+                        if scale_x_list is None
+                        else (
+                            scale_x_list[foc]["std"] * pos1 + scale_x_list[foc]["mean"]
+                        ).round(2)
+                    )
+                    pos2_small = (
+                        pos2.round(2)
+                        if scale_x_list is None
+                        else (
+                            scale_x_list[foc]["std"] * pos2 + scale_x_list[foc]["mean"]
+                        ).round(2)
+                    )
+
+                    active_indices_1, active_indices_2, active_indices_3 = (
+                        self.split_dataset_2(parent_active_indices, foc, pos1, pos2)
+                    )
+
+                    if j % 3 == 0:
+                        active_indices_new, comparison_num, comparison = (
+                            active_indices_1,
+                            f"< {pos1_small}",
+                            "<",
+                        )
+                    elif j % 3 == 1:
+                        active_indices_new, comparison_num, comparison = (
+                            active_indices_2,
+                            f">= {pos1_small} & <= {pos2_small}",
+                            (">=", "<="),
+                        )
+                    elif j % 3 == 2:
+                        active_indices_new, comparison_num, comparison = (
+                            active_indices_3,
+                            f"> {pos2_small}",
+                            ">",
+                        )
                     else:
-                        name = foc_name + "  > {}".format(pos_small)
-                        comparison = ">"
+                        raise ValueError("j % 3 must be 0, 1 or 2")
+                    name = f"{foc_name} {comparison_num}"
+                else:
+                    raise ValueError("cur_split_n_regions must be 2 or 3")
 
                 name = (
                     parent_name + " | " + name
-                    if nodes_to_add == 2
+                    if nodes_to_add in [2, 3]
                     else parent_name + " and " + name
                 )
 
@@ -521,6 +677,8 @@ class Best:
             # update parent_level_nodes
             parent_level_nodes = new_parent_level_nodes
             parent_level_active_indices = new_parent_level_active_indices
+            prev_nodes_added = nodes_to_add
+            prev_nodes_start_idx = len(parent_level_nodes) - nodes_to_add
 
         return tree
 

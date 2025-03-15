@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 class Tree:
     """A class to represent a tree structure."""
+
     def __init__(self):
         self.nodes = []
         self.node_dict = {}  # Fast lookup by name
@@ -25,15 +26,32 @@ class Tree:
 
     def _get_condition_string(self, node, scale_x_list):
         """Generate the condition string for a node."""
-        pos = node.info['position']
+        pos = node.info["position"]
+        if type(pos) == tuple:
+            pos1, pos2 = pos
+            comp = node.info["comparison"]
+
+            if scale_x_list:
+                feature_stats = scale_x_list[node.info["feature"]]
+                pos1 = feature_stats["std"] * pos1 + feature_stats["mean"]
+                pos2 = feature_stats["std"] * pos2 + feature_stats["mean"]
+
+            if type(comp) == tuple:
+                comp1, comp2 = node.info["comparison"]
+                return f"{node.info['foc_name']} ≥ {pos1:.2f} & ≤ {pos2:.2f}"
+            elif comp == "<":
+                return f"{node.info['foc_name']} < {pos1:.2f}"
+            elif comp == ">":
+                return f"{node.info['foc_name']} > {pos2:.2f}"
+
         if scale_x_list:
-            feature_stats = scale_x_list[node.info['feature']]
-            pos = feature_stats['std'] * pos + feature_stats['mean']
+            feature_stats = scale_x_list[node.info["feature"]]
+            pos = feature_stats["std"] * pos + feature_stats["mean"]
         return f"{node.info['foc_name']} {self._comparison_str(node.info['comparison'])} {pos:.2f}"
 
     @staticmethod
     def _comparison_str(comparison):
-        return {">=": "≥", "<=": "≤", "!=": "≠", "==":"="}.get(comparison, comparison)
+        return {">=": "≥", "<=": "≤", "!=": "≠", "==": "="}.get(comparison, comparison)
 
     def add_node(self, name: str, parent_name: typing.Optional[str], data: dict):
         parent_node = self.node_dict.get(parent_name) if parent_name else None
@@ -61,7 +79,9 @@ class Tree:
     def update_display_names(self, scale_x_list):
         for node in self.nodes:
             node.display_name = self.set_display_name(node.name, scale_x_list)
-            node.display_name_short = self.set_display_name(node.name, scale_x_list, full=False)
+            node.display_name_short = self.set_display_name(
+                node.name, scale_x_list, full=False
+            )
 
     def show_full_tree(self, scale_x_list=None):
         """Print the full tree structure.
@@ -99,8 +119,10 @@ class Tree:
 
     def _recursive_print_full_tree(self, node):
         indent = "    " * node.info["level"]
-        print(f"{indent}{node.display_name_short} 🔹 [id: {node.idx} | heter: {node.info['heterogeneity']:.2f} "
-              f"| inst: {node.info['nof_instances']:d} | w: {node.info['weight']:.2f}]")
+        print(
+            f"{indent}{node.display_name_short} 🔹 [id: {node.idx} | heter: {node.info['heterogeneity']:.2f} "
+            f"| inst: {node.info['nof_instances']:d} | w: {node.info['weight']:.2f}]"
+        )
         for child in self.get_children(node.name):
             self._recursive_print_full_tree(child)
 
@@ -127,12 +149,18 @@ class Tree:
             else:
                 drop = prev_heter - stats["heterogeneity"]
                 perc = 100 * drop / prev_heter if prev_heter else 0
-                print(f"{indent}Level {lev}🔹heter: {stats['heterogeneity']:.2f} | 🔻{drop:.2f} ({perc:.2f}%)")
+                print(
+                    f"{indent}Level {lev}🔹heter: {stats['heterogeneity']:.2f} | 🔻{drop:.2f} ({perc:.2f}%)"
+                )
             prev_heter = stats["heterogeneity"]
 
     def get_level_stats(self, level):
         level_nodes = [node for node in self.nodes if node.info["level"] == level]
-        return {"heterogeneity": sum(n.info["heterogeneity"] * n.info["weight"] for n in level_nodes)}
+        return {
+            "heterogeneity": sum(
+                n.info["heterogeneity"] * n.info["weight"] for n in level_nodes
+            )
+        }
 
     @staticmethod
     def _get_parent_chain(node):
@@ -162,7 +190,14 @@ class Node:
             raise KeyError(f"Missing required keys in node info: {missing}")
 
         if self.info["level"] > 0:
-            extra_keys = {"feature", "foc_name", "feature_type", "position", "comparison", "candidate_split_positions"}
+            extra_keys = {
+                "feature",
+                "foc_name",
+                "feature_type",
+                "position",
+                "comparison",
+                "candidate_split_positions",
+            }
             if not extra_keys.issubset(self.info):
                 missing = extra_keys - self.info.keys()
                 raise KeyError(f"Missing required keys for non-root node: {missing}")
